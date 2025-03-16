@@ -1,18 +1,17 @@
 const express = require('express');
 const fs = require('fs').promises;
 const path = require('path');
-const fetch = require('node-fetch'); // Ensure you use node‑fetch v2 if needed
+const fetch = require('node-fetch'); // Ensure node‑fetch v2 is installed if needed
 const app = express();
 const port = 3000;
 const DB_FILE = './db.json';
 
-// In‑memory storage for intervals per auth token.
-// Example: intervalsByAuthToken["TOKEN123"] = [intervalID1, intervalID2, …]
+// In‑memory storage: For each authToken, store an array of interval IDs.
 const intervalsByAuthToken = {};
 
 app.use(express.json());
 
-// Helper functions to read/write the DB (db.json)
+// Helper functions for DB
 async function readDB() {
   const raw = await fs.readFile(DB_FILE, 'utf8');
   return JSON.parse(raw);
@@ -21,7 +20,7 @@ async function writeDB(data) {
   await fs.writeFile(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-// Serve static pages
+// Serve the login and config pages
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
@@ -29,7 +28,7 @@ app.get('/conf/:authToken', (req, res) => {
   res.sendFile(path.join(__dirname, 'config.html'));
 });
 
-// Save configs for a given auth token
+// Save configs (array) for a given token
 app.post('/conf/:authToken/save-configs', async (req, res) => {
   try {
     const { authToken } = req.params;
@@ -42,13 +41,13 @@ app.post('/conf/:authToken/save-configs', async (req, res) => {
     db[authToken].configs = configs;
     await writeDB(db);
     res.json({ success: true, message: 'Configs saved' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: error.message });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// Start/Stop auto‑post state endpoint
+// Save auto‑post state (“started” or “stopped”) for a given token
 app.post('/conf/:authToken/save-auto-post-state', async (req, res) => {
   try {
     const { authToken } = req.params;
@@ -66,10 +65,10 @@ app.post('/conf/:authToken/save-auto-post-state', async (req, res) => {
     } else {
       stopAutoPost(authToken);
     }
-    res.json({ success: true, message: `Auto‑post state set to ${state}` });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: error.message });
+    res.json({ success: true, message: `Auto-post state set to ${state}` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
@@ -84,13 +83,13 @@ app.get('/conf/:authToken/load-configs', async (req, res) => {
       configs: userData.configs || [],
       autoPostState: userData.autoPostState || 'stopped'
     });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: error.message });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// Save auth token endpoint
+// Save auth token
 app.post('/save-auth-token', async (req, res) => {
   try {
     const { authToken } = req.body;
@@ -103,13 +102,13 @@ app.post('/save-auth-token', async (req, res) => {
     }
     await writeDB(db);
     res.json({ success: true, message: 'Auth token saved' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: error.message });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// Send a Discord message using the provided config
+// Helper to send a Discord message
 function sendDiscordMessage(authToken, config) {
   fetch(`https://discord.com/api/v10/channels/${config.channelID}/messages`, {
     method: 'POST',
@@ -119,7 +118,7 @@ function sendDiscordMessage(authToken, config) {
     },
     body: JSON.stringify({ content: config.message })
   })
-    .then(res => res.json())
+    .then(r => r.json())
     .then(data => {
       if (data.id) {
         console.log(`[${new Date().toLocaleTimeString()}] Sent to ${config.channelID}: Success`);
@@ -132,9 +131,11 @@ function sendDiscordMessage(authToken, config) {
     });
 }
 
-// Start auto‑post intervals for a given auth token based on stored configs
+// Start auto‑post intervals for a given token (for each config)
 async function startAutoPost(authToken) {
-  stopAutoPost(authToken); // Clear any existing intervals
+  // First, clear any existing intervals
+  stopAutoPost(authToken);
+
   const db = await readDB();
   const userData = db[authToken];
   if (!userData || !Array.isArray(userData.configs)) return;
@@ -142,27 +143,27 @@ async function startAutoPost(authToken) {
   intervalsByAuthToken[authToken] = [];
 
   userData.configs.forEach(config => {
-    // Send immediately
+    // Send one message immediately
     sendDiscordMessage(authToken, config);
-    // Then send repeatedly based on the delay (in seconds)
+    // Then schedule messages repeatedly (delay is in seconds)
     const intervalId = setInterval(() => {
       sendDiscordMessage(authToken, config);
     }, config.delay * 1000);
     intervalsByAuthToken[authToken].push(intervalId);
   });
-  console.log(`Auto‑post started for ${authToken}`);
+  console.log(`Auto-post started for ${authToken}`);
 }
 
-// Stop auto‑post intervals for a given auth token
+// Stop auto‑post intervals for a given token
 function stopAutoPost(authToken) {
   if (intervalsByAuthToken[authToken]) {
     intervalsByAuthToken[authToken].forEach(id => clearInterval(id));
     intervalsByAuthToken[authToken] = [];
   }
-  console.log(`Auto‑post stopped for ${authToken}`);
+  console.log(`Auto-post stopped for ${authToken}`);
 }
 
-// On server startup, resume auto‑post for any token whose state is "started"
+// On server startup, resume auto‑post for tokens that were running
 async function resumeAllAutoPosts() {
   const db = await readDB();
   for (const authToken in db) {

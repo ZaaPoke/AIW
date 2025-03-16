@@ -30,7 +30,7 @@
   </style>
 </head>
 <body>
-  <div class="container my-4" id="bodys">
+  <div class="container my-4">
     <h3 id="pageTitle">Auto Post Discord Configuration</h3>
   </div>
   <div class="card mb-4">
@@ -47,7 +47,6 @@
             <table class="table table-striped">
               <thead>
                 <tr>
-                  <th>Select</th>
                   <th>Message</th>
                   <th>Server</th>
                   <th>Channel</th>
@@ -56,7 +55,7 @@
                 </tr>
               </thead>
               <tbody id="configTableBody">
-                <!-- Configs will be dynamically added here -->
+                <!-- Rows added dynamically -->
               </tbody>
             </table>
           </div>
@@ -82,13 +81,13 @@
                 </tr>
               </thead>
               <tbody id="logTableBody">
-                <!-- Logs will be dynamically added here -->
+                <!-- Logs added dynamically -->
               </tbody>
             </table>
           </div>
         </div>
       </div>
-      <!-- Start/Stop Buttons in one row -->
+      <!-- Global Start/Stop Buttons -->
       <div class="d-flex align-items-center gap-2" style="margin-top: 1.5rem;">
         <button id="startBtn" class="btn btn-success" onclick="handleStartClick()">Start</button>
         <button id="stopBtn" class="btn btn-danger" onclick="handleStopClick()">Stop</button>
@@ -98,9 +97,8 @@
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11.7.0/dist/sweetalert2.all.min.js"></script>
   <script>
     let botConfigs = [];
+    let autoPostState = "stopped"; // global state loaded from server
     let currentAuthToken = "";
-    // User manually selects configs to start/stop; this does not auto‑stop running channels
-    let selectedConfigs = [];
     const showToast = Swal.mixin({
       toast: true,
       position: "top-end",
@@ -123,6 +121,35 @@
         confirmButtonText: "Yes"
       });
     document.getElementById("clearLogsBtn").addEventListener("click", clearLogs);
+
+    // Helper: Fetch channel and server names using Discord API.
+    async function getChannelAndServerName(authToken, channelID) {
+      try {
+        const channelRes = await fetch(`https://discord.com/api/v10/channels/${channelID}`, {
+          headers: { Authorization: authToken }
+        });
+        if (!channelRes.ok) throw new Error("Could not fetch channel info");
+        const channelData = await channelRes.json();
+        const channelName = channelData.name || channelID;
+        let serverName = "Unknown";
+        if (channelData.guild_id) {
+          const guildRes = await fetch(`https://discord.com/api/v10/guilds/${channelData.guild_id}`, {
+            headers: { Authorization: authToken }
+          });
+          if (guildRes.ok) {
+            const guildData = await guildRes.json();
+            serverName = guildData.name || "Unknown Server";
+          }
+        } else {
+          serverName = "DM / No Guild";
+        }
+        return { channelName, serverName };
+      } catch (err) {
+        return { channelName: channelID, serverName: "Unknown" };
+      }
+    }
+
+    // Add a config – fetch names and store in config object.
     async function addConfig() {
       const { value: config } = await Swal.fire({
         title: "Add Config",
@@ -135,13 +162,16 @@
         preConfirm: () => validateConfig()
       });
       if (config) {
-        // (Optional: You could fetch server/channel names here as well.)
+        const { channelName, serverName } = await getChannelAndServerName(currentAuthToken, config.channelID);
+        config.channelName = channelName;
+        config.serverName = serverName;
         botConfigs.push(config);
         updateConfigTable();
         saveConfigs();
         showToast.fire({ icon: "success", title: "Config added" });
       }
     }
+
     async function editConfig(index) {
       const config = botConfigs[index];
       const { value: newConfig } = await Swal.fire({
@@ -157,12 +187,21 @@
         preConfirm: () => validateConfig("edit-")
       });
       if (newConfig) {
+        if (newConfig.channelID !== config.channelID) {
+          const { channelName, serverName } = await getChannelAndServerName(currentAuthToken, newConfig.channelID);
+          newConfig.channelName = channelName;
+          newConfig.serverName = serverName;
+        } else {
+          newConfig.channelName = config.channelName;
+          newConfig.serverName = config.serverName;
+        }
         botConfigs[index] = newConfig;
         updateConfigTable();
         saveConfigs();
         showToast.fire({ icon: "success", title: "Config updated" });
       }
     }
+
     function validateConfig(prefix = "") {
       const message = document.getElementById(prefix + "message").value.trim();
       const channelID = document.getElementById(prefix + "channelID").value.trim();
@@ -177,8 +216,9 @@
       }
       return { message, channelID, delay: delaySeconds };
     }
+
     function deleteConfig(index) {
-      confirmAction("Delete Config", "Are you sure?").then((result) => {
+      confirmAction("Delete Config", "Are you sure?").then(result => {
         if (result.isConfirmed) {
           botConfigs.splice(index, 1);
           updateConfigTable();
@@ -187,29 +227,18 @@
         }
       });
     }
-    // Toggle selection (manual – does not affect running auto‑post)
-    function toggleConfigSelection(index, isSelected) {
-      const config = botConfigs[index];
-      if (isSelected) {
-        if (!selectedConfigs.includes(config)) {
-          selectedConfigs.push(config);
-        }
-      } else {
-        selectedConfigs = selectedConfigs.filter(c => c !== config);
-      }
-      updateConfigTable();
-    }
+
+    // Render the configs table using the saved server/channel names and global status.
     function updateConfigTable() {
       const tbody = document.getElementById("configTableBody");
       tbody.innerHTML = "";
       botConfigs.forEach((config, index) => {
-        const isSelected = selectedConfigs.includes(config);
-        // (Status badge could be improved by showing server auto‑post state; here we leave it static.)
+        // Use the global autoPostState for status display.
+        const statusBadge = (autoPostState === "started") ? 
+          '<span class="badge bg-success">Active</span>' : 
+          '<span class="badge bg-danger">Inactive</span>';
         const row = document.createElement("tr");
         row.innerHTML = `
-          <td>
-            <input type="checkbox" onchange="toggleConfigSelection(${index}, this.checked)" ${isSelected ? "checked" : ""}>
-          </td>
           <td title="${config.message}">${truncateText(config.message, 20)}</td>
           <td>${config.serverName || "N/A"}</td>
           <td>${config.channelName || config.channelID}</td>
@@ -219,47 +248,87 @@
             <button class="btn btn-danger btn-sm me-2" onclick="deleteConfig(${index})">
               <i class="fas fa-trash-alt"></i>
             </button>
-            <span class="badge" id="status-${index}">Status</span>
+            ${statusBadge}
           </td>
         `;
         tbody.appendChild(row);
       });
     }
+
     function truncateText(text, maxLength) {
       return text.length <= maxLength ? text : text.substr(0, maxLength - 3) + "...";
     }
+
     async function saveConfigs() {
-      fetch(`/conf/${currentAuthToken}/save-configs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ configs: botConfigs })
-      })
-      .then(r => r.json())
-      .then(data => {
+      try {
+        const response = await fetch(`/conf/${currentAuthToken}/save-configs`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ configs: botConfigs })
+        });
+        const data = await response.json();
         if (!data.success) console.error("Failed to save configs");
-      })
-      .catch(err => console.error("Error:", err));
+      } catch (err) {
+        console.error("Error:", err);
+      }
     }
-    function saveAutoPostState(state) {
-      fetch(`/conf/${currentAuthToken}/save-auto-post-state`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state })
-      })
-      .then(r => r.json())
-      .then(data => {
-        if (!data.success) console.error("Failed to save auto-post state");
-      })
-      .catch(err => console.error("Error:", err));
+
+    // Global Start/Stop buttons – they send the command to the server.
+    async function handleStartClick() {
+      // Instruct the server to start auto-post
+      try {
+        const response = await fetch(`/conf/${currentAuthToken}/save-auto-post-state`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ state: "started" })
+        });
+        const data = await response.json();
+        if (data.success) {
+          autoPostState = "started";
+          updateConfigTable();
+          showToast.fire({ icon: "success", title: "Auto post started (server side)" });
+        }
+      } catch (err) {
+        console.error("Error:", err);
+      }
     }
+
+    async function handleStopClick() {
+      // Instruct the server to stop auto-post
+      try {
+        const response = await fetch(`/conf/${currentAuthToken}/save-auto-post-state`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ state: "stopped" })
+        });
+        const data = await response.json();
+        if (data.success) {
+          autoPostState = "stopped";
+          updateConfigTable();
+          showToast.fire({ icon: "success", title: "Auto post stopped (server side)" });
+        }
+      } catch (err) {
+        console.error("Error:", err);
+      }
+    }
+
     async function loadConfigs() {
       try {
         const response = await fetch(`/conf/${currentAuthToken}/load-configs`);
         const data = await response.json();
         if (data.success) {
           botConfigs = data.configs || [];
+          autoPostState = data.autoPostState || "stopped";
+          // For any config missing names, fetch them.
+          for (let config of botConfigs) {
+            if (!config.channelName || !config.serverName) {
+              const names = await getChannelAndServerName(currentAuthToken, config.channelID);
+              config.channelName = names.channelName;
+              config.serverName = names.serverName;
+            }
+          }
           updateConfigTable();
-          if (data.autoPostState === "started") {
+          if (autoPostState === "started") {
             console.log("Server auto-post is active.");
           }
         } else {
@@ -269,47 +338,8 @@
         console.error("Error loading configs:", err);
       }
     }
-    async function handleStartClick() {
-      if (selectedConfigs.length === 0) {
-        Swal.fire("Error", "Select at least one config to start", "error");
-        return;
-      }
-      // Save configs then instruct server to start auto-post
-      await saveConfigs();
-      fetch(`/conf/${currentAuthToken}/save-auto-post-state`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state: "started" })
-      })
-      .then(r => r.json())
-      .then(data => {
-        if (data.success) {
-          showToast.fire({ icon: "success", title: "Auto post started (server side)" });
-        }
-      });
-      // Clear manual selection after command
-      selectedConfigs = [];
-      updateConfigTable();
-    }
-    async function handleStopClick() {
-      if (selectedConfigs.length === 0) {
-        Swal.fire("Error", "Select at least one config to stop", "error");
-        return;
-      }
-      fetch(`/conf/${currentAuthToken}/save-auto-post-state`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state: "stopped" })
-      })
-      .then(r => r.json())
-      .then(data => {
-        if (data.success) {
-          showToast.fire({ icon: "success", title: "Auto post stopped (server side)" });
-        }
-      });
-      selectedConfigs = [];
-      updateConfigTable();
-    }
+
+    // Initialization: get auth token from URL and load configs.
     const urlParts = window.location.pathname.split("/");
     currentAuthToken = urlParts[urlParts.length - 1];
     if (!currentAuthToken) {
@@ -318,7 +348,7 @@
         title: "Invalid Auth Token",
         text: "Redirecting to main page...",
         timer: 2000,
-        timerProgressBar: true,
+        timerProgressBar: true
       }).then(() => {
         window.location.href = "/";
       });
